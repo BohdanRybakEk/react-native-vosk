@@ -5,6 +5,7 @@ import com.facebook.react.bridge.NativeModule
 import com.facebook.react.bridge.ReactApplicationContext
 import com.facebook.react.module.model.ReactModuleInfo
 import com.facebook.react.module.model.ReactModuleInfoProvider
+import com.vosk.BuildConfig
 import java.util.HashMap
 
 class VoskPackage : BaseReactPackage() {
@@ -19,13 +20,14 @@ class VoskPackage : BaseReactPackage() {
   override fun getReactModuleInfoProvider(): ReactModuleInfoProvider {
     return ReactModuleInfoProvider {
       val moduleInfos: MutableMap<String, ReactModuleInfo> = HashMap()
+      val isTurboModule = BuildConfig.IS_NEW_ARCHITECTURE_ENABLED
       moduleInfos[VoskModule.NAME] = ReactModuleInfo(
         VoskModule.NAME,
         VoskModule.NAME,
         false,  // canOverrideExistingModule
         false,  // needsEagerInit
         false,  // isCxxModule
-        true // isTurboModule
+        isTurboModule // isTurboModule
       )
       moduleInfos
     }
