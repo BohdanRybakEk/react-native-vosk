@@ -4,6 +4,9 @@
 #import <AVFoundation/AVFoundation.h>
 #import <Foundation/Foundation.h>
 #include <vector> // added for float32 -> int16 conversion
+#ifndef RCT_NEW_ARCH_ENABLED
+#import <React/RCTBridgeModule.h>
+#endif
 
 // Specific key to detect execution on the processing queue
 static void *kVoskProcessingQueueKey = &kVoskProcessingQueueKey;
@@ -49,6 +52,12 @@ RCT_EXPORT_MODULE()
   return self;
 }
 
+#ifndef RCT_NEW_ARCH_ENABLED
++ (BOOL)requiresMainQueueSetup {
+  return YES;
+}
+#endif
+
 - (void)dealloc {
   if (_recognizer) {
     vosk_recognizer_free(_recognizer);
@@ -62,9 +71,24 @@ RCT_EXPORT_MODULE()
   ];
 }
 
+#ifdef RCT_NEW_ARCH_ENABLED
 - (void)loadModel:(nonnull NSString *)path
           resolve:(nonnull RCTPromiseResolveBlock)resolve
            reject:(nonnull RCTPromiseRejectBlock)reject {
+  [self loadModelImpl:path resolve:resolve reject:reject];
+}
+#else
+RCT_EXPORT_METHOD(loadModel:(NSString *)path
+                  resolver:(RCTPromiseResolveBlock)resolve
+                  rejecter:(RCTPromiseRejectBlock)reject)
+{
+  [self loadModelImpl:path resolve:resolve reject:reject];
+}
+#endif
+
+- (void)loadModelImpl:(nonnull NSString *)path
+              resolve:(nonnull RCTPromiseResolveBlock)resolve
+               reject:(nonnull RCTPromiseRejectBlock)reject {
   // Unload the current model if any
   _currentModel = nil;
   NSError *err = nil;
@@ -78,10 +102,11 @@ RCT_EXPORT_MODULE()
   }
 }
 
-// Make the options nullable to avoid issues with codegen and optional fields
-- (void)start:(JS::NativeVosk::VoskOptions *_Nullable)options
-      resolve:(nonnull RCTPromiseResolveBlock)resolve
-       reject:(nonnull RCTPromiseRejectBlock)reject {
+// Core start implementation used by both architectures
+- (void)startWithGrammar:(NSArray<NSString *> *_Nullable)grammar
+               timeoutMs:(double)timeoutMs
+                 resolve:(nonnull RCTPromiseResolveBlock)resolve
+                  reject:(nonnull RCTPromiseRejectBlock)reject {
   if (_currentModel == nil) {
     reject(@"start", @"Model not loaded", nil);
     return;
@@ -94,25 +119,6 @@ RCT_EXPORT_MODULE()
   _tapRetryCount = 0;
   _pendingTap = NO;
   AVAudioSession *audioSession = [AVAudioSession sharedInstance];
-
-  // Extract options (grammar, timeout) from the codegen structure
-  NSArray<NSString *> *grammar = nil;
-  double timeoutMs = -1;
-  if (options && options->grammar()) {
-    auto gVec = options->grammar();
-    if (gVec) {
-      NSMutableArray<NSString *> *tmp = [NSMutableArray new];
-      size_t count = gVec->size();
-      for (size_t i = 0; i < count; ++i) {
-        NSString *s = gVec->at(static_cast<int>(i));
-        if (s) [tmp addObject:s];
-      }
-      grammar = tmp.count > 0 ? tmp : nil;
-    }
-  }
-  if (options && options->timeout()) {
-    timeoutMs = *(options->timeout());
-  }
 
   CFAbsoluteTime tStart = CFAbsoluteTimeGetCurrent();
   // Configure session category first (allowed even before permission)
@@ -228,6 +234,57 @@ RCT_EXPORT_MODULE()
   }];
 }
 
+#ifdef RCT_NEW_ARCH_ENABLED
+- (void)start:(JS::NativeVosk::VoskOptions *_Nullable)options
+      resolve:(nonnull RCTPromiseResolveBlock)resolve
+       reject:(nonnull RCTPromiseRejectBlock)reject {
+  NSArray<NSString *> *grammar = nil;
+  double timeoutMs = -1;
+  if (options && options->grammar()) {
+    auto gVec = options->grammar();
+    if (gVec) {
+      NSMutableArray<NSString *> *tmp = [NSMutableArray new];
+      size_t count = gVec->size();
+      for (size_t i = 0; i < count; ++i) {
+        NSString *s = gVec->at(static_cast<int>(i));
+        if (s)
+          [tmp addObject:s];
+      }
+      grammar = tmp.count > 0 ? tmp : nil;
+    }
+  }
+  if (options && options->timeout()) {
+    timeoutMs = *(options->timeout());
+  }
+  [self startWithGrammar:grammar timeoutMs:timeoutMs resolve:resolve reject:reject];
+}
+#else
+RCT_EXPORT_METHOD(start:(NSDictionary *)options
+                  resolver:(RCTPromiseResolveBlock)resolve
+                  rejecter:(RCTPromiseRejectBlock)reject)
+{
+  NSArray<NSString *> *grammar = nil;
+  double timeoutMs = -1;
+  if ([options isKindOfClass:[NSDictionary class]]) {
+    NSArray *grammarValue = options[@"grammar"];
+    if ([grammarValue isKindOfClass:[NSArray class]]) {
+      NSMutableArray<NSString *> *tmp = [NSMutableArray new];
+      for (id value in grammarValue) {
+        if ([value isKindOfClass:[NSString class]]) {
+          [tmp addObject:value];
+        }
+      }
+      grammar = tmp.count > 0 ? tmp : nil;
+    }
+    id timeoutValue = options[@"timeout"];
+    if ([timeoutValue respondsToSelector:@selector(doubleValue)]) {
+      timeoutMs = [timeoutValue doubleValue];
+    }
+  }
+  [self startWithGrammar:grammar timeoutMs:timeoutMs resolve:resolve reject:reject];
+}
+#endif
+
 // Retry-based tap installer; called on main queue only
 - (void)scheduleTapInstallationWithBufferSize:(AVAudioFrameCount)bufferSize {
   if (!_isRunning) { _pendingTap = NO; return; }
@@ -277,18 +334,40 @@ RCT_EXPORT_MODULE()
   }
 }
 
-- (void)stop {
+- (void)stopCommon {
   if (!_isRunning)
     return; // idempotent
   [self stopInternalWithoutEvents:NO];
 }
 
-- (void)unload {
+#ifdef RCT_NEW_ARCH_ENABLED
+- (void)stop {
+  [self stopCommon];
+}
+#else
+RCT_EXPORT_METHOD(stop)
+{
+  [self stopCommon];
+}
+#endif
+
+- (void)unloadCommon {
   if (_isRunning) {
     [self stopInternalWithoutEvents:NO];
   }
   _currentModel = nil;
 }
+
+#ifdef RCT_NEW_ARCH_ENABLED
+- (void)unload {
+  [self unloadCommon];
+}
+#else
+RCT_EXPORT_METHOD(unload)
+{
+  [self unloadCommon];
+}
+#endif
 
 - (void)addListener:(nonnull NSString *)eventType {
 }
@@ -296,10 +375,12 @@ RCT_EXPORT_MODULE()
 - (void)removeListeners:(double)count {
 }
 
+#ifdef RCT_NEW_ARCH_ENABLED
 - (std::shared_ptr<facebook::react::TurboModule>)getTurboModule:
     (const facebook::react::ObjCTurboModule::InitParams &)params {
   return std::make_shared<facebook::react::NativeVoskSpecJSI>(params);
 }
+#endif
 
 // Internal cleanup
 - (void)stopInternalWithoutEvents:(BOOL)withoutEvents {
@@ -358,5 +439,27 @@ RCT_EXPORT_MODULE()
       withOptions:AVAudioSessionSetActiveOptionNotifyOthersOnDeactivation
             error:&err];
 }
+
+#ifndef RCT_NEW_ARCH_ENABLED
+- (void)emitOnResult:(NSString *)value {
+  [self sendEventWithName:@"onResult" body:value];
+}
+
+- (void)emitOnPartialResult:(NSString *)value {
+  [self sendEventWithName:@"onPartialResult" body:value];
+}
+
+- (void)emitOnFinalResult:(NSString *)value {
+  [self sendEventWithName:@"onFinalResult" body:value];
+}
+
+- (void)emitOnError:(NSString *)value {
+  [self sendEventWithName:@"onError" body:value];
+}
+
+- (void)emitOnTimeout {
+  [self sendEventWithName:@"onTimeout" body:nil];
+}
+#endif
 
 @end
