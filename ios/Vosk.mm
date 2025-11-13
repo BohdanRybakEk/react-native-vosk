@@ -334,30 +334,38 @@ RCT_EXPORT_METHOD(start:(NSDictionary *)options
   }
 }
 
-- (void)stop {
+- (void)stopCommon {
   if (!_isRunning)
     return; // idempotent
   [self stopInternalWithoutEvents:NO];
 }
 
-#ifndef RCT_NEW_ARCH_ENABLED
+#ifdef RCT_NEW_ARCH_ENABLED
+- (void)stop {
+  [self stopCommon];
+}
+#else
 RCT_EXPORT_METHOD(stop)
 {
-  [self stop];
+  [self stopCommon];
 }
 #endif
 
-- (void)unload {
+- (void)unloadCommon {
   if (_isRunning) {
     [self stopInternalWithoutEvents:NO];
   }
   _currentModel = nil;
 }
 
-#ifndef RCT_NEW_ARCH_ENABLED
+#ifdef RCT_NEW_ARCH_ENABLED
+- (void)unload {
+  [self unloadCommon];
+}
+#else
 RCT_EXPORT_METHOD(unload)
 {
-  [self unload];
+  [self unloadCommon];
 }
 #endif
 
